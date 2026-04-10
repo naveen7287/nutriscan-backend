@@ -1,12 +1,11 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-require("dotenv").config();
 
 const app = express();
 
 /* ===========================
-   ✅ MIDDLEWARE (FIXED)
+   ✅ MIDDLEWARE
 =========================== */
 app.use(cors({
   origin: "*",
@@ -14,7 +13,7 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
-// 🔥 IMPORTANT FIX (for image size)
+// ✅ Fix large image issue
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
@@ -73,11 +72,11 @@ const ProfileSchema = new mongoose.Schema({
 const Profile = mongoose.model("Profile", ProfileSchema);
 
 /* ===========================
-   🤖 ANALYZE IMAGE API (FIXED)
+   🤖 ANALYZE IMAGE API
 =========================== */
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
-app.post("/analyze", async (req, res) => {
+app.post("/api/analyze", async (req, res) => {
   try {
     const { imageBase64, sourceType, profile } = req.body;
 
@@ -90,7 +89,7 @@ app.post("/analyze", async (req, res) => {
       {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({
           contents: [
@@ -132,7 +131,6 @@ app.post("/analyze", async (req, res) => {
 
     const data = await response.json();
 
-    // 🔥 Clean Gemini response
     let text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
     text = text.replace(/```json|```/g, "").trim();
 
@@ -147,7 +145,7 @@ app.post("/analyze", async (req, res) => {
 });
 
 /* ===========================
-   ✅ FOOD LOGS API
+   🍽️ FOOD LOGS API
 =========================== */
 app.post("/api/logs", async (req, res) => {
   try {
@@ -170,16 +168,23 @@ app.get("/api/logs", async (req, res) => {
 });
 
 /* ===========================
-   👤 PROFILE API
+   👤 PROFILE API (FIXED)
 =========================== */
 app.post("/api/profile", async (req, res) => {
   try {
+    const data = { ...req.body };
+
+    // 🔥 FIX: remove _id
+    delete data._id;
+
     const profile = await Profile.findOneAndUpdate(
       {},
-      req.body,
+      data,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+
     res.json(profile);
+
   } catch (error) {
     console.error("Profile Save Error:", error);
     res.status(500).json({ error: "Failed to save profile" });
