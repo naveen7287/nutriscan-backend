@@ -1,22 +1,29 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+require("dotenv").config();
 
 const app = express();
 
-// Middleware
+/* ===========================
+   ✅ MIDDLEWARE (FIXED)
+=========================== */
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
-app.use(express.json());
 
-// MongoDB Connection
-// Render will provide process.env.MONGO_URI from your Environment settings
+// 🔥 IMPORTANT FIX (for image size)
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
+
+/* ===========================
+   🗄️ MONGODB CONNECTION
+=========================== */
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB Connected Successfully"))
-  .catch(err => console.log("❌ MongoDB Connection Error:", err));
+  .then(() => console.log("✅ MongoDB Connected"))
+  .catch(err => console.log("❌ MongoDB Error:", err));
 
 /* ===========================
    🍛 FOOD SCHEMA
@@ -66,6 +73,80 @@ const ProfileSchema = new mongoose.Schema({
 const Profile = mongoose.model("Profile", ProfileSchema);
 
 /* ===========================
+   🤖 ANALYZE IMAGE API (FIXED)
+=========================== */
+const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+
+app.post("/analyze", async (req, res) => {
+  try {
+    const { imageBase64, sourceType, profile } = req.body;
+
+    if (!imageBase64) {
+      return res.status(400).json({ error: "Image missing" });
+    }
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `Analyze this food image. Source: ${sourceType}.
+                  Health issues: ${profile?.healthIssues || "None"}.
+
+                  Return STRICT JSON:
+                  {
+                    "food_name": "",
+                    "ingredients": [],
+                    "nutrition": {
+                      "calories": 0,
+                      "protein_g": 0,
+                      "fat_g": 0,
+                      "carbs_g": 0
+                    },
+                    "confidence": 0,
+                    "health_recommendation": {
+                      "should_consume": true,
+                      "reason": ""
+                    }
+                  }`
+                },
+                {
+                  inlineData: {
+                    mimeType: "image/jpeg",
+                    data: imageBase64
+                  }
+                }
+              ]
+            }
+          ]
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    // 🔥 Clean Gemini response
+    let text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    text = text.replace(/```json|```/g, "").trim();
+
+    const json = JSON.parse(text);
+
+    res.json(json);
+
+  } catch (error) {
+    console.error("❌ ANALYZE ERROR:", error);
+    res.status(500).json({ error: "Failed to analyze image" });
+  }
+});
+
+/* ===========================
    ✅ FOOD LOGS API
 =========================== */
 app.post("/api/logs", async (req, res) => {
@@ -94,7 +175,7 @@ app.get("/api/logs", async (req, res) => {
 app.post("/api/profile", async (req, res) => {
   try {
     const profile = await Profile.findOneAndUpdate(
-      {}, 
+      {},
       req.body,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
@@ -115,12 +196,12 @@ app.get("/api/profile", async (req, res) => {
 });
 
 /* ===========================
-   🚀 SERVER START
+   🚀 SERVER
 =========================== */
-app.get("/", (req, res) => res.send("NutriScan Backend is running 🚀"));
-app.get("/health", (req, res) => res.status(200).json({ status: "ok" }));
+app.get("/", (req, res) => res.send("NutriScan Backend Running 🚀"));
+app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
