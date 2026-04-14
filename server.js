@@ -74,14 +74,20 @@ const Profile = mongoose.model("Profile", ProfileSchema);
 /* ===========================
    🤖 ANALYZE IMAGE API
 =========================== */
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
 app.post("/api/analyze", async (req, res) => {
   try {
     const { imageBase64, sourceType, profile } = req.body;
 
+    // ✅ Validate input
     if (!imageBase64) {
       return res.status(400).json({ error: "Image missing" });
+    }
+
+    // ✅ API key check
+    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === "") {
+       console.error("❌ GEMINI_API_KEY is missing or empty");
+       return res.status(500).json({ error: "API key missing" });
     }
 
     const response = await fetch(
@@ -97,28 +103,28 @@ app.post("/api/analyze", async (req, res) => {
               parts: [
                 {
                   text: `Analyze this food image. Source: ${sourceType}.
-                  Health issues: ${profile?.healthIssues || "None"}.
+Health issues: ${profile?.healthIssues || "None"}.
 
-                  Return STRICT JSON:
-                  {
-                    "food_name": "",
-                    "ingredients": [],
-                    "nutrition": {
-                      "calories": 0,
-                      "protein_g": 0,
-                      "fat_g": 0,
-                      "carbs_g": 0
-                    },
-                    "confidence": 0,
-                    "health_recommendation": {
-                      "should_consume": true,
-                      "reason": ""
-                    }
-                  }`
+Return STRICT JSON:
+{
+  "food_name": "",
+  "ingredients": [],
+  "nutrition": {
+    "calories": 0,
+    "protein_g": 0,
+    "fat_g": 0,
+    "carbs_g": 0
+  },
+  "confidence": 0,
+  "health_recommendation": {
+    "should_consume": true,
+    "reason": ""
+  }
+}`
                 },
                 {
-                  inlineData: {
-                    mimeType: "image/jpeg",
+                  inline_data: {   // 🔥 FIX (snake_case)
+                    mime_type: "image/jpeg",
                     data: imageBase64
                   }
                 }
@@ -128,13 +134,43 @@ app.post("/api/analyze", async (req, res) => {
         })
       }
     );
+    console.log("Status:", response.status);
+ 
+
+    // ✅ Handle API error
+    if (!response.ok) {
+      const err = await response.text();
+      console.error("Gemini API Error:", err);
+      return res.status(500).json({ error: "AI request failed" });
+    }
 
     const data = await response.json();
 
-    let text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    let text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    console.log("RAW AI:", text);
+
+    if (!text) {
+      return res.status(500).json({ error: "No AI response" });
+    }
+
+    // ✅ Clean markdown
     text = text.replace(/```json|```/g, "").trim();
 
-    const json = JSON.parse(text);
+    // ✅ Extract JSON safely
+    const match = text.match(/\{[\s\S]*\}/);
+
+    if (!match) {
+      return res.status(500).json({ error: "Invalid AI response" });
+    }
+
+    let json;
+    try {
+      json = JSON.parse(match[0]);
+    } catch (err) {
+      console.error("PARSE ERROR:", match[0]);
+      return res.status(500).json({ error: "JSON parse failed" });
+    }
 
     res.json(json);
 
