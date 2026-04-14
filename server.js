@@ -78,6 +78,7 @@ const Profile = mongoose.model("Profile", ProfileSchema);
 app.post("/api/analyze", async (req, res) => {
   try {
     const { imageBase64, sourceType, profile } = req.body;
+    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
 
     // ✅ Validate input
     if (!imageBase64) {
@@ -91,7 +92,7 @@ app.post("/api/analyze", async (req, res) => {
     }
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: {
@@ -125,7 +126,7 @@ Return STRICT JSON:
                 {
                   inline_data: {   // 🔥 FIX (snake_case)
                     mime_type: "image/jpeg",
-                    data: imageBase64
+                    data: cleanBase64
                   }
                 }
               ]
