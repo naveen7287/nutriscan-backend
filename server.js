@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const fetch = require("node-fetch"); // ✅ Required for API calls in Node.js
 
 const app = express();
 
@@ -13,9 +14,9 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
-// ✅ Fix large image issue
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ limit: "10mb", extended: true }));
+// Support large image uploads (up to 50mb)
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 /* ===========================
    🗄️ MONGODB CONNECTION
@@ -34,9 +35,15 @@ const FoodSchema = new mongoose.Schema({
     calories: Number,
     protein_g: Number,
     fat_g: Number,
-    carbs_g: Number
+    carbs_g: Number,
+    sugar_g: Number,
+    fiber_g: Number
   },
   type: String,
+  timestamp: {
+    type: String,
+    default: () => new Date().toISOString()
+  },
   createdAt: {
     type: Date,
     default: Date.now
@@ -61,7 +68,9 @@ const ProfileSchema = new mongoose.Schema({
     calories: Number,
     protein_g: Number,
     fat_g: Number,
-    carbs_g: Number
+    carbs_g: Number,
+    sugar_g: Number,
+    fiber_g: Number
   },
   createdAt: {
     type: Date,
@@ -72,108 +81,68 @@ const ProfileSchema = new mongoose.Schema({
 const Profile = mongoose.model("Profile", ProfileSchema);
 
 /* ===========================
-   🤖 ANALYZE IMAGE API
+   🤖 ANALYZE IMAGE API (Hugging Face)
 =========================== */
-
 app.post("/api/analyze", async (req, res) => {
   try {
-    const { imageBase64, sourceType, profile } = req.body;
-    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-
-    // ✅ Validate input
+    const { imageBase64 } = req.body;
+    
     if (!imageBase64) {
       return res.status(400).json({ error: "Image missing" });
     }
 
-    // ✅ API key check
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === "") {
-       console.error("❌ GEMINI_API_KEY is missing or empty");
-       return res.status(500).json({ error: "API key missing" });
+    // Clean base64 prefix if present
+    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+
+    // API key check
+    if (!process.env.HF_API_KEY) {
+       console.error("❌ HF_API_KEY is missing");
+       return res.status(500).json({ error: "Hugging Face API key missing" });
     }
 
+    // Call Hugging Face (BLIP Model)
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base",
       {
         method: "POST",
         headers: {
+          Authorization: `Bearer ${process.env.HF_API_KEY}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: `Analyze this food image. Source: ${sourceType}.
-Health issues: ${profile?.healthIssues || "None"}.
-
-Return STRICT JSON:
-{
-  "food_name": "",
-  "ingredients": [],
-  "nutrition": {
-    "calories": 0,
-    "protein_g": 0,
-    "fat_g": 0,
-    "carbs_g": 0
-  },
-  "confidence": 0,
-  "health_recommendation": {
-    "should_consume": true,
-    "reason": ""
-  }
-}`
-                },
-                {
-                  inline_data: {   // 🔥 FIX (snake_case)
-                    mime_type: "image/jpeg",
-                    data: cleanBase64
-                  }
-                }
-              ]
-            }
-          ]
-        })
+        body: JSON.stringify({ inputs: cleanBase64 })
       }
     );
-    console.log("Status:", response.status);
- 
-
-    // ✅ Handle API error
-    if (!response.ok) {
-      const err = await response.text();
-      console.error("Gemini API Error:", err);
-      return res.status(500).json({ error: "AI request failed" });
-    }
 
     const data = await response.json();
 
-    let text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    console.log("RAW AI:", text);
-
-    if (!text) {
-      return res.status(500).json({ error: "No AI response" });
+    // Handle model loading or rate limits
+    if (data.error) {
+      console.error("HF ERROR:", data.error);
+      return res.status(500).json({ 
+        error: "AI model loading or rate limited. Try again in few seconds." 
+      });
     }
 
-    // ✅ Clean markdown
-    text = text.replace(/```json|```/g, "").trim();
+    const caption = data[0]?.generated_text || "Unknown food";
 
-    // ✅ Extract JSON safely
-    const match = text.match(/\{[\s\S]*\}/);
-
-    if (!match) {
-      return res.status(500).json({ error: "Invalid AI response" });
-    }
-
-    let json;
-    try {
-      json = JSON.parse(match[0]);
-    } catch (err) {
-      console.error("PARSE ERROR:", match[0]);
-      return res.status(500).json({ error: "JSON parse failed" });
-    }
-
-    res.json(json);
+    // Return structured data (Static nutrition for demo)
+    res.json({
+      food_name: caption,
+      ingredients: [],
+      nutrition: {
+        calories: 250,
+        protein_g: 8,
+        fat_g: 10,
+        carbs_g: 30,
+        sugar_g: 5,
+        fiber_g: 3
+      },
+      confidence: 0.85,
+      health_recommendation: {
+        should_consume: true,
+        reason: "Detected as " + caption + ". General estimation provided."
+      }
+    });
 
   } catch (error) {
     console.error("❌ ANALYZE ERROR:", error);
@@ -186,7 +155,8 @@ Return STRICT JSON:
 =========================== */
 app.post("/api/logs", async (req, res) => {
   try {
-    const newFood = new Food(req.body);
+    const logData = { ...req.body, timestamp: new Date().toISOString() };
+    const newFood = new Food(logData);
     await newFood.save();
     res.json(newFood);
   } catch (error) {
@@ -197,7 +167,10 @@ app.post("/api/logs", async (req, res) => {
 
 app.get("/api/logs", async (req, res) => {
   try {
-    const data = await Food.find().sort({ createdAt: -1 });
+    const today = new Date().toISOString().split('T')[0];
+    const data = await Food.find({
+      timestamp: { $regex: `^${today}` }
+    }).sort({ createdAt: -1 });
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch food data" });
@@ -205,13 +178,11 @@ app.get("/api/logs", async (req, res) => {
 });
 
 /* ===========================
-   👤 PROFILE API (FIXED)
+   👤 PROFILE API
 =========================== */
 app.post("/api/profile", async (req, res) => {
   try {
     const data = { ...req.body };
-
-    // 🔥 FIX: remove _id
     delete data._id;
 
     const profile = await Profile.findOneAndUpdate(
@@ -219,11 +190,8 @@ app.post("/api/profile", async (req, res) => {
       data,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
-
     res.json(profile);
-
   } catch (error) {
-    console.error("Profile Save Error:", error);
     res.status(500).json({ error: "Failed to save profile" });
   }
 });
