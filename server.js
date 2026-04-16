@@ -198,7 +198,19 @@ app.post('/api/analyze', async (req, res) => {
       );
       clearTimeout(timeoutId);
 
-      const data = await response.json();
+      const contentType = response.headers.get("content-type");
+      let data;
+      
+      if (contentType && contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        const text = await response.text();
+        console.error(`[Analyze] Hugging Face returned non-JSON response (${response.status}):`, text.slice(0, 200));
+        return res.status(response.status || 500).json({ 
+          error: 'Hugging Face API returned an invalid response format',
+          details: `Status: ${response.status}. The API might be down or overloaded.`
+        });
+      }
       
       if (!response.ok || data.error) {
         console.error('Hugging Face API Error:', data);
