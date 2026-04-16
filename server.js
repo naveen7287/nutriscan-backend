@@ -171,7 +171,7 @@ app.post('/api/analyze', async (req, res) => {
 
     const cleanBase64 = image.includes('base64,') ? image.split('base64,')[1] : image;
 
-    const hfKey = process.env.HF_API_KEY;
+    const hfKey = process.env.HF_API_KEY?.trim();
     if (!hfKey) {
       console.error('[Analyze] HF_API_KEY is missing in environment variables.');
       return res.status(500).json({ error: 'Server configuration error: HF_API_KEY missing' });
@@ -182,9 +182,8 @@ app.post('/api/analyze', async (req, res) => {
     }
 
     const models = [
-      "Salesforce/blip-image-captioning-large",
       "Salesforce/blip-image-captioning-base",
-      "microsoft/git-base",
+      "Salesforce/blip-image-captioning-large",
       "nlpconnect/vit-gpt2-image-captioning"
     ];
 
@@ -192,22 +191,37 @@ app.post('/api/analyze', async (req, res) => {
     let success = false;
     let resultData = null;
 
+    const imageBuffer = Buffer.from(cleanBase64, 'base64');
+
     for (const model of models) {
       console.log(`[Analyze] Trying Hugging Face model: ${model}...`);
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s per model
-
+      
       try {
-        const response = await fetch(
+        let response = await fetch(
           `https://api-inference.huggingface.co/models/${model}`,
           {
             method: "POST",
             headers: { Authorization: `Bearer ${hfKey}` },
-            body: Buffer.from(cleanBase64, 'base64'),
-            signal: controller.signal
+            body: imageBuffer,
           }
         );
-        clearTimeout(timeoutId);
+
+        // Handle Model Loading (503)
+        if (response.status === 503) {
+          const data = await response.json();
+          console.log(`[Analyze] Model ${model} is loading. Waiting 5 seconds...`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+          // Retry once
+          response = await fetch(
+            `https://api-inference.huggingface.co/models/${model}`,
+            {
+              method: "POST",
+              headers: { Authorization: `Bearer ${hfKey}` },
+              body: imageBuffer,
+            }
+          );
+        }
 
         const contentType = response.headers.get("content-type");
         if (contentType && contentType.includes("application/json")) {
@@ -220,6 +234,10 @@ app.post('/api/analyze', async (req, res) => {
           } else {
             lastError = data.error || `Status ${response.status}`;
             console.warn(`[Analyze] Model ${model} failed:`, lastError);
+            
+            if (response.status === 404) {
+              lastError = `Model not found or API key restricted (404).`;
+            }
           }
         } else {
           const text = await response.text();
@@ -227,7 +245,6 @@ app.post('/api/analyze', async (req, res) => {
           console.warn(`[Analyze] Model ${model} returned non-JSON:`, text.slice(0, 100));
         }
       } catch (err) {
-        clearTimeout(timeoutId);
         lastError = err instanceof Error ? err.message : String(err);
         console.warn(`[Analyze] Model ${model} fetch error:`, lastError);
       }
@@ -235,12 +252,12 @@ app.post('/api/analyze', async (req, res) => {
 
     if (!success) {
       return res.status(500).json({ 
-        error: 'All Hugging Face models failed',
-        details: lastError || 'Unknown error'
+        error: 'Image analysis failed',
+        details: `All models returned errors. Last error: ${lastError}. Please check your HF_API_KEY in Render secrets.`
       });
     }
 
-    const caption = resultData[0]?.generated_text || "Unknown food";
+    const caption = resultData[0]?.generated_text || "Unknown food item";
     console.log(`[Analyze] Successfully analyzed: ${caption}`);
     res.json({
       food_name: caption,
