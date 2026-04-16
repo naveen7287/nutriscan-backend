@@ -176,9 +176,15 @@ app.post('/api/analyze', async (req, res) => {
       console.error('[Analyze] HF_API_KEY is missing in environment variables.');
       return res.status(500).json({ error: 'Server configuration error: HF_API_KEY missing' });
     }
+    
+    if (!hfKey.startsWith('hf_')) {
+      console.warn('[Analyze] HF_API_KEY does not start with "hf_". It might be invalid.');
+    }
 
     const models = [
+      "Salesforce/blip-image-captioning-large",
       "Salesforce/blip-image-captioning-base",
+      "microsoft/git-base",
       "nlpconnect/vit-gpt2-image-captioning"
     ];
 
