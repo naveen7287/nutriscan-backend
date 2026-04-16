@@ -4,12 +4,17 @@ import fs from 'fs';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), 'db.json');
+
+// Initialize Gemini AI using the standard SDK
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 // ✅ MIDDLEWARE
 app.use(cors());
@@ -41,7 +46,7 @@ const readLocalDB = () => {
     return JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
   } catch (e) { return { profiles: {}, logs: [] }; }
 };
-const writeLocalDB = (data) => {
+const writeLocalDB = (data: any) => {
   try { fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2)); } catch (e) {}
 };
 
@@ -71,13 +76,13 @@ const ProfileSchema = new mongoose.Schema({
 const Profile = mongoose.model('Profile', ProfileSchema);
 
 // ✅ HELPERS
-function calculateTargets(profile) {
+function calculateTargets(profile: any) {
   const { weight, height, age, gender, activityLevel } = profile;
   let bmr = gender === 'male' 
     ? (10 * weight + 6.25 * height - 5 * age + 5)
     : (10 * weight + 6.25 * height - 5 * age - 161);
 
-  const multipliers = {
+  const multipliers: Record<string, number> = {
     sedentary: 1.2, light: 1.375, moderate: 1.55, active: 1.725, very_active: 1.9,
   };
 
@@ -127,7 +132,7 @@ app.get('/api/logs', async (req, res) => {
       return res.json(logs);
     }
     const db = readLocalDB();
-    const todayLogs = db.logs.filter((l) => l.timestamp.startsWith(today));
+    const todayLogs = db.logs.filter((l: any) => l.timestamp.startsWith(today));
     res.json(todayLogs);
   } catch (error) { res.status(500).json({ error: 'Failed to fetch logs' }); }
 });
@@ -156,127 +161,63 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// ✅ HUGGING FACE ANALYZE ROUTE (Fallback Mode)
 app.post('/api/analyze', async (req, res) => {
   try {
     const { image } = req.body;
-    
-    if (!image) {
-      console.error('[Analyze] Image missing in request body.');
-      return res.status(400).json({ 
-        error: 'Image missing', 
-        details: 'The server received a request but the "image" field was empty.'
-      });
+    if (!image) return res.status(400).json({ error: 'Image missing' });
+
+    // API Key Safety Check
+    if (!process.env.GEMINI_API_KEY) {
+      console.error('[Analyze] GEMINI_API_KEY is missing in environment variables.');
+      return res.status(500).json({ error: 'Server configuration error: API key missing' });
     }
 
-    const cleanBase64 = image.includes('base64,') ? image.split('base64,')[1] : image;
+    const base64Data = image.includes('base64,') ? image.split('base64,')[1] : image;
 
-    const hfKey = process.env.HF_API_KEY?.trim();
-    if (!hfKey) {
-      console.error('[Analyze] HF_API_KEY is missing in environment variables.');
-      return res.status(500).json({ error: 'Server configuration error: HF_API_KEY missing' });
-    }
-    
-    if (!hfKey.startsWith('hf_')) {
-      console.warn('[Analyze] HF_API_KEY does not start with "hf_". It might be invalid.');
-    }
+    console.log(`[Analyze] Analyzing image with Gemini 1.5 Flash...`);
 
-    const models = [
-      "Salesforce/blip-image-captioning-base",
-      "Salesforce/blip-image-captioning-large",
-      "nlpconnect/vit-gpt2-image-captioning"
-    ];
-
-    let lastError = null;
-    let success = false;
-    let resultData = null;
-
-    const imageBuffer = Buffer.from(cleanBase64, 'base64');
-
-    for (const model of models) {
-      console.log(`[Analyze] Trying Hugging Face model: ${model}...`);
-      
-      try {
-        let response = await fetch(
-          `https://api-inference.huggingface.co/models/${model}`,
+    const result = await model.generateContent({
+      contents: [{
+        role: 'user',
+        parts: [
           {
-            method: "POST",
-            headers: { Authorization: `Bearer ${hfKey}` },
-            body: imageBuffer,
+            inlineData: {
+              data: base64Data,
+              mimeType: "image/jpeg",
+            },
+          },
+          {
+            text: "Analyze this food image. Identify the food name and estimate its nutritional values per serving. Return ONLY a JSON object with food_name, ingredients (array), nutrition (object with calories, protein_g, fat_g, carbs_g, sugar_g, fiber_g), and health_recommendation (object with should_consume and reason)."
           }
-        );
-
-        // Handle Model Loading (503)
-        if (response.status === 503) {
-          const data = await response.json();
-          console.log(`[Analyze] Model ${model} is loading. Waiting 5 seconds...`);
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          
-          // Retry once
-          response = await fetch(
-            `https://api-inference.huggingface.co/models/${model}`,
-            {
-              method: "POST",
-              headers: { Authorization: `Bearer ${hfKey}` },
-              body: imageBuffer,
-            }
-          );
-        }
-
-        const contentType = response.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-          const data = await response.json();
-          if (response.ok && !data.error) {
-            resultData = data;
-            success = true;
-            console.log(`[Analyze] Success with model: ${model}`);
-            break;
-          } else {
-            lastError = data.error || `Status ${response.status}`;
-            console.warn(`[Analyze] Model ${model} failed:`, lastError);
-            
-            if (response.status === 404) {
-              lastError = `Model not found or API key restricted (404).`;
-            }
-          }
-        } else {
-          const text = await response.text();
-          lastError = `Non-JSON response (Status ${response.status})`;
-          console.warn(`[Analyze] Model ${model} returned non-JSON:`, text.slice(0, 100));
-        }
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
-        console.warn(`[Analyze] Model ${model} fetch error:`, lastError);
+        ]
+      }],
+      generationConfig: {
+        maxOutputTokens: 500,
+        temperature: 0.2,
       }
-    }
-
-    if (!success) {
-      return res.status(500).json({ 
-        error: 'Image analysis failed',
-        details: `All models returned errors. Last error: ${lastError}. Please check your HF_API_KEY in Render secrets.`
-      });
-    }
-
-    const caption = resultData[0]?.generated_text || "Unknown food item";
-    console.log(`[Analyze] Successfully analyzed: ${caption}`);
-    res.json({
-      food_name: caption,
-      ingredients: [],
-      nutrition: { calories: 250, protein_g: 10, fat_g: 8, carbs_g: 35, sugar_g: 5, fiber_g: 3 },
-      confidence: 0.9,
-      health_recommendation: { should_consume: true, reason: `Detected as ${caption}.` }
     });
+
+    const response = await result.response;
+    let text = response.text();
+    
+    // Clean markdown if present
+    text = text.replace(/```json|```/g, "").trim();
+
+    try {
+      const data = JSON.parse(text);
+      res.json(data);
+    } catch (parseError) {
+      console.error('JSON Parse Error:', text);
+      return res.status(500).json({ error: 'Invalid AI response format' });
+    }
   } catch (error) {
-    console.error('Analyze Error:', error);
-    res.status(500).json({ 
-      error: 'Failed to analyze image',
-      details: error instanceof Error ? error.message : 'Unknown server error'
-    });
+    console.error('AI Analysis Error:', error);
+    res.status(500).json({ error: 'AI analysis failed' });
   }
 });
 
 // ✅ GLOBAL ERROR HANDLER (Ensures JSON instead of HTML)
-app.use((err, req, res, next) => {
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Global Server Error:', err);
   res.status(err.status || 500).json({ 
     error: 'Internal Server Error', 
