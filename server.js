@@ -179,36 +179,51 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(500).json({ error: 'Server configuration error: HF_API_KEY missing' });
     }
 
-    const response = await fetch(
-      "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${hfKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ inputs: cleanBase64 })
+    console.log(`[Analyze] Sending request to Hugging Face...`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+    try {
+      const response = await fetch(
+        "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${hfKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ inputs: cleanBase64 }),
+          signal: controller.signal
+        }
+      );
+      clearTimeout(timeoutId);
+
+      const data = await response.json();
+      
+      if (!response.ok || data.error) {
+        console.error('Hugging Face API Error:', data);
+        return res.status(response.status || 500).json({ 
+          error: data.error || 'Hugging Face API failed',
+          details: data.estimated_time ? `Model is loading. Estimated time: ${data.estimated_time}s` : (data.message || undefined)
+        });
       }
-    );
 
-    const data = await response.json();
-    
-    if (!response.ok || data.error) {
-      console.error('Hugging Face API Error:', data);
-      return res.status(response.status || 500).json({ 
-        error: data.error || 'Hugging Face API failed',
-        details: data.estimated_time ? `Model is loading. Estimated time: ${data.estimated_time}s` : undefined
+      const caption = data[0]?.generated_text || "Unknown food";
+      console.log(`[Analyze] Successfully analyzed: ${caption}`);
+      res.json({
+        food_name: caption,
+        ingredients: [],
+        nutrition: { calories: 250, protein_g: 10, fat_g: 8, carbs_g: 35, sugar_g: 5, fiber_g: 3 },
+        confidence: 0.9,
+        health_recommendation: { should_consume: true, reason: `Detected as ${caption}.` }
       });
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        throw new Error('Hugging Face API timed out after 30 seconds.');
+      }
+      throw fetchError;
     }
-
-    const caption = data[0]?.generated_text || "Unknown food";
-    res.json({
-      food_name: caption,
-      ingredients: [],
-      nutrition: { calories: 250, protein_g: 10, fat_g: 8, carbs_g: 35, sugar_g: 5, fiber_g: 3 },
-      confidence: 0.9,
-      health_recommendation: { should_consume: true, reason: `Detected as ${caption}.` }
-    });
   } catch (error) {
     console.error('Analyze Error:', error);
     res.status(500).json({ 
