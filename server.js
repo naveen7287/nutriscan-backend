@@ -46,7 +46,7 @@ const readLocalDB = () => {
     return JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
   } catch (e) { return { profiles: {}, logs: [] }; }
 };
-const writeLocalDB = (data: any) => {
+const writeLocalDB = (data) => {
   try { fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2)); } catch (e) {}
 };
 
@@ -76,13 +76,13 @@ const ProfileSchema = new mongoose.Schema({
 const Profile = mongoose.model('Profile', ProfileSchema);
 
 // ✅ HELPERS
-function calculateTargets(profile: any) {
+function calculateTargets(profile) {
   const { weight, height, age, gender, activityLevel } = profile;
   let bmr = gender === 'male' 
     ? (10 * weight + 6.25 * height - 5 * age + 5)
     : (10 * weight + 6.25 * height - 5 * age - 161);
 
-  const multipliers: Record<string, number> = {
+  const multipliers = {
     sedentary: 1.2, light: 1.375, moderate: 1.55, active: 1.725, very_active: 1.9,
   };
 
@@ -132,7 +132,7 @@ app.get('/api/logs', async (req, res) => {
       return res.json(logs);
     }
     const db = readLocalDB();
-    const todayLogs = db.logs.filter((l: any) => l.timestamp.startsWith(today));
+    const todayLogs = db.logs.filter((l) => l.timestamp.startsWith(today));
     res.json(todayLogs);
   } catch (error) { res.status(500).json({ error: 'Failed to fetch logs' }); }
 });
@@ -217,7 +217,7 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 // ✅ GLOBAL ERROR HANDLER (Ensures JSON instead of HTML)
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((err, req, res, next) => {
   console.error('Global Server Error:', err);
   res.status(err.status || 500).json({ 
     error: 'Internal Server Error', 
