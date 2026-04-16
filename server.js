@@ -173,12 +173,18 @@ app.post('/api/analyze', async (req, res) => {
 
     const cleanBase64 = image.includes('base64,') ? image.split('base64,')[1] : image;
 
+    const hfKey = process.env.HF_API_KEY;
+    if (!hfKey) {
+      console.error('[Analyze] HF_API_KEY is missing in environment variables.');
+      return res.status(500).json({ error: 'Server configuration error: HF_API_KEY missing' });
+    }
+
     const response = await fetch(
       "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base",
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${process.env.HF_API_KEY}`,
+          Authorization: `Bearer ${hfKey}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({ inputs: cleanBase64 })
@@ -186,7 +192,14 @@ app.post('/api/analyze', async (req, res) => {
     );
 
     const data = await response.json();
-    if (data.error) return res.status(500).json({ error: data.error });
+    
+    if (!response.ok || data.error) {
+      console.error('Hugging Face API Error:', data);
+      return res.status(response.status || 500).json({ 
+        error: data.error || 'Hugging Face API failed',
+        details: data.estimated_time ? `Model is loading. Estimated time: ${data.estimated_time}s` : undefined
+      });
+    }
 
     const caption = data[0]?.generated_text || "Unknown food";
     res.json({
@@ -198,7 +211,10 @@ app.post('/api/analyze', async (req, res) => {
     });
   } catch (error) {
     console.error('Analyze Error:', error);
-    res.status(500).json({ error: 'Failed to analyze image' });
+    res.status(500).json({ 
+      error: 'Failed to analyze image',
+      details: error instanceof Error ? error.message : 'Unknown server error'
+    });
   }
 });
 
