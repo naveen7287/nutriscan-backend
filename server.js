@@ -156,7 +156,7 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// ✅ HUGGING FACE ANALYZE ROUTE (JSON Base64 Mode)
+// ✅ HUGGING FACE ANALYZE ROUTE (Binary Mode)
 app.post('/api/analyze', async (req, res) => {
   try {
     const { image } = req.body;
@@ -169,8 +169,6 @@ app.post('/api/analyze', async (req, res) => {
       });
     }
 
-    console.log(`[Analyze] Image received. Size: ${(image.length / 1024).toFixed(2)} KB`);
-
     const cleanBase64 = image.includes('base64,') ? image.split('base64,')[1] : image;
 
     const hfKey = process.env.HF_API_KEY;
@@ -179,7 +177,7 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(500).json({ error: 'Server configuration error: HF_API_KEY missing' });
     }
 
-    console.log(`[Analyze] Sending request to Hugging Face...`);
+    console.log(`[Analyze] Sending binary request to Hugging Face...`);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
 
@@ -190,9 +188,8 @@ app.post('/api/analyze', async (req, res) => {
           method: "POST",
           headers: {
             Authorization: `Bearer ${hfKey}`,
-            "Content-Type": "application/json"
           },
-          body: JSON.stringify({ inputs: cleanBase64 }),
+          body: Buffer.from(cleanBase64, 'base64'),
           signal: controller.signal
         }
       );
@@ -205,10 +202,10 @@ app.post('/api/analyze', async (req, res) => {
         data = await response.json();
       } else {
         const text = await response.text();
-        console.error(`[Analyze] Hugging Face returned non-JSON response (${response.status}):`, text.slice(0, 200));
+        console.error(`[Analyze] Hugging Face returned non-JSON response (${response.status}):`, text.slice(0, 500));
         return res.status(response.status || 500).json({ 
           error: 'Hugging Face API returned an invalid response format',
-          details: `Status: ${response.status}. The API might be down or overloaded.`
+          details: `Status: ${response.status}. The model might be loading or the API is overloaded.`
         });
       }
       
@@ -232,7 +229,7 @@ app.post('/api/analyze', async (req, res) => {
     } catch (fetchError) {
       clearTimeout(timeoutId);
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-        throw new Error('Hugging Face API timed out after 30 seconds.');
+        return res.status(504).json({ error: 'Hugging Face API timed out after 30 seconds.' });
       }
       throw fetchError;
     }
@@ -243,6 +240,15 @@ app.post('/api/analyze', async (req, res) => {
       details: error instanceof Error ? error.message : 'Unknown server error'
     });
   }
+});
+
+// ✅ GLOBAL ERROR HANDLER (Ensures JSON instead of HTML)
+app.use((err, req, res, next) => {
+  console.error('Global Server Error:', err);
+  res.status(err.status || 500).json({ 
+    error: 'Internal Server Error', 
+    details: err.message || 'An unexpected error occurred on the server.'
+  });
 });
 
 async function startServer() {
