@@ -42,7 +42,7 @@ const readDB = () => {
   }
 };
 
-const writeDB = (data: any) => {
+const writeDB = (data) => {
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
   } catch {}
