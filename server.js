@@ -115,12 +115,12 @@ app.post('/api/analyze', async (req, res) => {
     let match = null;
     let success = false;
 
-    // 🔥 RETRY LOOP (MODEL + RESPONSE)
-    for (let attempt = 0; attempt < 2 && !success; attempt++) {
+    // 🔥 FIX 1: increase retries to 3
+    for (let attempt = 0; attempt < 3 && !success; attempt++) {
 
       const prompt = attempt === 0
-        ? `Analyze this food image and return ONLY valid JSON.`
-        : `STRICT: Return COMPLETE JSON only. Ensure JSON ends with }`;
+        ? "Analyze this food image and return ONLY valid JSON."
+        : "STRICT: Return COMPLETE VALID JSON only. Ensure JSON is properly closed.";
 
       for (const name of modelList) {
         try {
@@ -158,12 +158,19 @@ app.post('/api/analyze', async (req, res) => {
           // Extract JSON
           match = text.match(/\{[\s\S]*\}/);
 
-          if (match && match[0].endsWith("}")) {
-            success = true;
-            break;
+          if (!match) {
+            console.log("⚠️ No JSON found, retrying...");
+            continue;
           }
 
-          console.log("⚠️ Incomplete JSON, retrying...");
+          // 🔥 FIX 2: REAL JSON VALIDATION
+          try {
+            JSON.parse(match[0]);
+            success = true;
+            break;
+          } catch {
+            console.log("⚠️ Invalid JSON, retrying...");
+          }
 
         } catch (err) {
           console.log(`❌ Model failed: ${name}`, err.message);
@@ -193,7 +200,6 @@ app.post('/api/analyze', async (req, res) => {
     return res.json(getFallback());
   }
 });
-
 // ✅ GLOBAL FALLBACK FUNCTION (VERY IMPORTANT)
 function getFallback() {
   return {
