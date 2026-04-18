@@ -17,7 +17,8 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// ================= DB SETUP =================
+// ================= DATABASE =================
+
 let isMongoConnected = false;
 const MONGO_URI = process.env.MONGO_URI;
 
@@ -50,12 +51,12 @@ const writeDB = (data) => {
 
 // ================= ROUTES =================
 
-// Health
+// Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// Logs
+// Get logs
 app.get('/api/logs', async (req, res) => {
   const today = new Date().toISOString().split('T')[0];
 
@@ -67,11 +68,11 @@ app.get('/api/logs', async (req, res) => {
   }
 
   const db = readDB();
-  const logs = db.logs.filter((l: any) => l.timestamp.startsWith(today));
+  const logs = db.logs.filter((l) => l.timestamp.startsWith(today));
   res.json(logs);
 });
 
-// Save Log
+// Save log
 app.post('/api/logs', async (req, res) => {
   const log = { ...req.body, timestamp: new Date().toISOString() };
 
@@ -86,7 +87,7 @@ app.post('/api/logs', async (req, res) => {
   res.json(log);
 });
 
-// ================= AI ANALYZE =================
+// ================= GEMINI ANALYZE =================
 
 app.post('/api/analyze', async (req, res) => {
   try {
@@ -100,7 +101,6 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(500).json({ error: "API key missing" });
     }
 
-    // ✅ Init Gemini safely INSIDE route
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({
       model: "gemini-1.5-flash"
@@ -123,7 +123,7 @@ app.post('/api/analyze', async (req, res) => {
             }
           },
           {
-            text: "Analyze this food and return ONLY JSON with food_name, ingredients, nutrition (calories, protein_g, fat_g, carbs_g, sugar_g, fiber_g), and health_recommendation (should_consume, reason)."
+            text: "Analyze food and return ONLY JSON with food_name, ingredients, nutrition (calories, protein_g, fat_g, carbs_g, sugar_g, fiber_g), and health_recommendation (should_consume, reason)."
           }
         ]
       }],
@@ -139,7 +139,7 @@ app.post('/api/analyze', async (req, res) => {
     // ✅ Clean markdown
     text = text.replace(/```json|```/g, "").trim();
 
-    // ✅ Extract JSON safely
+    // ✅ Extract JSON
     const match = text.match(/\{[\s\S]*\}/);
 
     if (!match) {
@@ -166,12 +166,12 @@ app.post('/api/analyze', async (req, res) => {
 
 // ================= ERROR HANDLER =================
 
-app.use((err: any, req: any, res: any, next: any) => {
+app.use((err, req, res, next) => {
   console.error("GLOBAL ERROR:", err);
   res.status(500).json({ error: "Internal server error" });
 });
 
-// ================= SERVER =================
+// ================= START SERVER =================
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
